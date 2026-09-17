@@ -1,12 +1,29 @@
+
 import threading
 from pathlib import Path
 
 import numpy as np
-import sounddevice as sd
 import soundfile as sf
 
 from core.exceptions import AudioProcessingError
 from core.logging import logger
+
+
+def _load_sounddevice():
+    """
+    Load sounddevice only when microphone recording is requested.
+
+    This prevents the FastAPI application from crashing during
+    startup on servers without PortAudio.
+    """
+    try:
+        import sounddevice as sd
+        return sd
+    except (ImportError, OSError) as exc:
+        raise AudioProcessingError(
+            "Microphone recording is unavailable in this environment. "
+            "Run the application on a machine with audio support."
+        ) from exc
 
 
 class AudioRecorder:
@@ -18,7 +35,7 @@ class AudioRecorder:
         - Pause
         - Resume
         - Stop
-        - Automatic audio normalization
+        - Audio normalization
         - Peak limiting
         - Real-time microphone RMS level
     """
@@ -30,34 +47,19 @@ class AudioRecorder:
         target_rms: float = 0.10,
         max_gain: float = 4.0,
     ) -> None:
-
         self.sample_rate = sample_rate
         self.channels = channels
-
-        # Target average speech loudness.
         self.target_rms = target_rms
-
-        # Safety limit so extremely quiet recordings
-        # are not amplified indefinitely.
         self.max_gain = max_gain
 
         self._recording = False
         self._paused = False
 
         self._audio_data: list[np.ndarray] = []
-
         self._lock = threading.Lock()
 
-        self._stream: sd.InputStream | None = None
-
-        # --------------------------------------------------
-        # LIVE AUDIO LEVEL
-        # --------------------------------------------------
-
-        # Current raw microphone RMS level.
-        #
-        # This value is updated continuously from the
-        # sounddevice callback.
+        # Do not initialize microphone hardware here.
+        self._stream = None
         self._current_rms = 0.0
 
     # ==================================================
@@ -66,14 +68,10 @@ class AudioRecorder:
 
     @property
     def is_recording(self) -> bool:
-        """Return True when recording is active."""
-
         return self._recording
 
     @property
     def is_paused(self) -> bool:
-        """Return True when recording is paused."""
-
         return self._paused
 
     # ==================================================
@@ -82,51 +80,17 @@ class AudioRecorder:
 
     @property
     def current_rms(self) -> float:
-        """
-        Return the latest microphone RMS level.
-
-        The value represents the raw microphone signal
-        before normalization and peak limiting.
-
-        Returns:
-            float: Current RMS audio level.
-        """
-
         with self._lock:
             return float(self._current_rms)
 
     @property
     def current_audio_level(self) -> float:
-        """
-        Return a normalized microphone level between 0 and 1.
-
-        This is intended for visualizers.
-
-        Returns:
-            float:
-                0.0 = silence
-                1.0 = very loud input
-        """
-
         rms = self.current_rms
 
         if rms <= 0.0:
             return 0.0
 
-        # Speech microphones commonly produce relatively
-        # small RMS values. Scale the value into a useful
-        # visualizer range.
-        level = rms / 0.20
-
-        level = max(
-            0.0,
-            min(
-                level,
-                1.0,
-            ),
-        )
-
-        return float(level)
+        return float(max(0.0, min(rms / 0.20, 1.0)))
 
     # ==================================================
     # AUDIO CALLBACK
@@ -137,14 +101,9 @@ class AudioRecorder:
         indata: np.ndarray,
         frames: int,
         time_info: object,
-        status: sd.CallbackFlags,
+        status: object,
     ) -> None:
-        """
-        Receive microphone audio from sounddevice.
-
-        The callback continuously calculates RMS so the
-        UI can later display a microphone-reactive waveform.
-        """
+        """Receive microphone audio and update the live RMS level."""
 
         if status:
             logger.warning(
@@ -152,18 +111,11 @@ class AudioRecorder:
                 status,
             )
 
-        # --------------------------------------------------
-        # CALCULATE LIVE MICROPHONE LEVEL
-        # --------------------------------------------------
-
         try:
-
             rms = float(
                 np.sqrt(
                     np.mean(
-                        np.square(
-                            indata
-                        )
+                        np.square(indata)
                     )
                 )
             )
@@ -172,26 +124,14 @@ class AudioRecorder:
                 self._current_rms = rms
 
         except Exception:
-            # Never allow visualizer calculation to
-            # interrupt microphone capture.
+            # A visualizer calculation must not interrupt capture.
             pass
 
-        # --------------------------------------------------
-        # STORE AUDIO
-        # --------------------------------------------------
-
-        # Do not store audio when stopped or paused.
-        if (
-            not self._recording
-            or self._paused
-        ):
+        if not self._recording or self._paused:
             return
 
         with self._lock:
-
-            self._audio_data.append(
-                indata.copy()
-            )
+            self._audio_data.append(indata.copy())
 
     # ==================================================
     # START
@@ -205,14 +145,12 @@ class AudioRecorder:
                 "Audio recording is already active."
             )
 
+        # Import sounddevice only when recording is requested.
+        sd = _load_sounddevice()
+
         try:
-
             with self._lock:
-
                 self._audio_data.clear()
-
-                # Reset live level when a new recording
-                # starts.
                 self._current_rms = 0.0
 
             self._paused = False
@@ -227,14 +165,23 @@ class AudioRecorder:
 
             self._stream.start()
 
-            logger.info(
-                "Audio recording started."
-            )
+            logger.info("Audio recording started.")
 
-        except Exception as exc:
-
+        except AudioProcessingError:
             self._recording = False
             self._paused = False
+            raise
+
+        except Exception as exc:
+            self._recording = False
+            self._paused = False
+
+            if self._stream is not None:
+                try:
+                    self._stream.close()
+                except Exception:
+                    pass
+
             self._stream = None
 
             with self._lock:
@@ -253,12 +200,7 @@ class AudioRecorder:
     # ==================================================
 
     def pause_recording(self) -> None:
-        """
-        Pause microphone capture.
-
-        The microphone stream remains open, but
-        incoming audio is not stored.
-        """
+        """Pause capture without closing the microphone stream."""
 
         if not self._recording:
             raise AudioProcessingError(
@@ -272,14 +214,10 @@ class AudioRecorder:
 
         self._paused = True
 
-        # Make the visualizer fall back to silence
-        # while the meeting is paused.
         with self._lock:
             self._current_rms = 0.0
 
-        logger.info(
-            "Audio recording paused."
-        )
+        logger.info("Audio recording paused.")
 
     # ==================================================
     # RESUME
@@ -300,9 +238,7 @@ class AudioRecorder:
 
         self._paused = False
 
-        logger.info(
-            "Audio recording resumed."
-        )
+        logger.info("Audio recording resumed.")
 
     # ==================================================
     # NORMALIZATION
@@ -312,15 +248,10 @@ class AudioRecorder:
         self,
         audio: np.ndarray,
     ) -> np.ndarray:
-        """
-        Normalize recorded speech to a healthy
-        listening level while preventing clipping.
-        """
+        """Normalize recorded speech while preventing clipping."""
 
-        # Remove DC offset.
         audio = audio - np.mean(audio)
 
-        # Calculate RMS.
         rms = float(
             np.sqrt(
                 np.mean(
@@ -336,29 +267,20 @@ class AudioRecorder:
         )
 
         logger.info(
-            "Raw audio levels: "
-            "RMS=%.4f, Peak=%.4f",
+            "Raw audio levels: RMS=%.4f, Peak=%.4f",
             rms,
             peak,
         )
 
-        # Avoid amplification if the recording
-        # contains essentially no signal.
         if rms < 0.0001:
-
             logger.warning(
                 "Audio signal is extremely weak. "
                 "Skipping normalization."
             )
+            return audio.astype(np.float32)
 
-            return audio
-
-        # Calculate gain needed to reach target RMS.
-        gain = self.target_rms / rms
-
-        # Prevent excessive amplification.
         gain = min(
-            gain,
+            self.target_rms / rms,
             self.max_gain,
         )
 
@@ -369,84 +291,53 @@ class AudioRecorder:
 
         audio = audio * gain
 
-        # ==================================================
-        # PEAK LIMITER
-        # ==================================================
-
         peak_after_gain = float(
             np.max(
                 np.abs(audio)
             )
         )
 
-        # Keep a little headroom below digital full scale.
         max_peak = 0.95
 
         if peak_after_gain > max_peak:
-
-            limiter_gain = (
-                max_peak
-                / peak_after_gain
-            )
-
-            audio = (
-                audio
-                * limiter_gain
-            )
+            limiter_gain = max_peak / peak_after_gain
+            audio = audio * limiter_gain
 
             logger.info(
                 "Peak limiter applied: %.2fx",
                 limiter_gain,
             )
 
-        # Final safety clamp.
-        audio = np.clip(
+        return np.clip(
             audio,
             -1.0,
             1.0,
-        )
-
-        return audio.astype(
-            np.float32
-        )
+        ).astype(np.float32)
 
     # ==================================================
     # STOP
     # ==================================================
 
-    def stop_recording(
-        self,
-    ) -> np.ndarray:
-        """
-        Stop recording and return the complete
-        recorded audio.
-
-        Audio captured during pause periods is
-        intentionally excluded.
-        """
+    def stop_recording(self) -> np.ndarray:
+        """Stop recording and return the captured audio."""
 
         if not self._recording:
-
             raise AudioProcessingError(
                 "Audio recording is not active."
             )
 
+        self._recording = False
+        self._paused = False
+
         try:
-
-            self._recording = False
-            self._paused = False
-
             if self._stream is not None:
-
                 self._stream.stop()
                 self._stream.close()
-
                 self._stream = None
 
             with self._lock:
-
                 if not self._audio_data:
-
+                    self._current_rms = 0.0
                     raise AudioProcessingError(
                         "No audio data was captured."
                     )
@@ -457,18 +348,12 @@ class AudioRecorder:
                 )
 
                 self._audio_data.clear()
-
-                # Reset visualizer level after stopping.
                 self._current_rms = 0.0
 
-            # Normalize the complete recording.
-            audio = self._normalize_audio(
-                audio
-            )
+            audio = self._normalize_audio(audio)
 
             logger.info(
-                "Audio recording stopped. "
-                "Captured %s samples.",
+                "Audio recording stopped. Captured %s samples.",
                 len(audio),
             )
 
@@ -478,7 +363,6 @@ class AudioRecorder:
             raise
 
         except Exception as exc:
-
             logger.exception(
                 "Failed to stop audio recording."
             )
@@ -501,7 +385,6 @@ class AudioRecorder:
         path = Path(output_path)
 
         try:
-
             path.parent.mkdir(
                 parents=True,
                 exist_ok=True,
@@ -522,7 +405,6 @@ class AudioRecorder:
             return path
 
         except Exception as exc:
-
             logger.exception(
                 "Failed to save audio recording."
             )
