@@ -1,0 +1,237 @@
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from backend.schemas.mom import MinutesOfMeeting
+
+
+LOCAL_TIMEZONE = ZoneInfo("Asia/Kolkata")
+
+
+def format_local_datetime(value) -> str:
+    """Convert a UTC-aware datetime to India Standard Time for display."""
+
+    if value is None:
+        return "Not available"
+
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=ZoneInfo("UTC"))
+
+    return value.astimezone(LOCAL_TIMEZONE).strftime(
+        "%d %b %Y, %I:%M %p"
+    )
+
+
+class TXTExporter:
+    """
+    Export Minutes of Meeting into a plain-text document.
+    """
+
+    def export(
+        self,
+        mom: MinutesOfMeeting,
+        output_path: str | Path,
+    ) -> Path:
+        """
+        Export a MinutesOfMeeting object to a TXT file.
+
+        Args:
+            mom: Structured Minutes of Meeting.
+            output_path: Destination file path.
+
+        Returns:
+            Path: Path to the generated TXT file.
+        """
+
+        output_file = Path(output_path)
+
+        output_file.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        lines: list[str] = []
+
+        lines.append(
+            "MINUTES OF MEETING"
+        )
+
+        lines.append(
+            "=" * 60
+        )
+
+        lines.append("")
+
+        lines.append(
+            f"Meeting: {mom.meeting_title}"
+        )
+
+        if mom.meeting_date:
+            lines.append(
+                f"Date: {format_local_datetime(mom.meeting_date)}"
+            )
+        else:
+            lines.append(
+                "Date: Not available"
+            )
+
+        if mom.duration_seconds is not None:
+            minutes = (
+                mom.duration_seconds // 60
+            )
+            seconds = (
+                mom.duration_seconds % 60
+            )
+
+            lines.append(
+                f"Duration: "
+                f"{minutes:02d}:{seconds:02d}"
+            )
+        else:
+            lines.append(
+                "Duration: Not available"
+            )
+
+        lines.append("")
+
+        lines.append(
+            "EXECUTIVE SUMMARY"
+        )
+
+        lines.append(
+            "-" * 60
+        )
+
+        lines.append(
+            mom.summary
+        )
+
+        lines.append("")
+
+        lines.append(
+            "KEY POINTS"
+        )
+
+        lines.append(
+            "-" * 60
+        )
+
+        if mom.key_points:
+            for index, point in enumerate(
+                mom.key_points,
+                start=1,
+            ):
+                lines.append(
+                    f"{index}. {point}"
+                )
+        else:
+            lines.append(
+                "No key points were recorded."
+            )
+
+        lines.append("")
+
+        lines.append(
+            "DECISIONS"
+        )
+
+        lines.append(
+            "-" * 60
+        )
+
+        if mom.decisions:
+            for index, decision in enumerate(
+                mom.decisions,
+                start=1,
+            ):
+                lines.append(
+                    f"{index}. {decision}"
+                )
+        else:
+            lines.append(
+                "No decisions were recorded."
+            )
+
+        lines.append("")
+
+        lines.append(
+            "ACTION ITEMS"
+        )
+
+        lines.append(
+            "-" * 60
+        )
+
+        if mom.action_items:
+            for index, item in enumerate(
+                mom.action_items,
+                start=1,
+            ):
+                assignee = (
+                    item.assignee
+                    or "Unassigned"
+                )
+
+                deadline = (
+                    item.deadline
+                    or "No deadline"
+                )
+
+                lines.append(
+                    f"{index}. {item.task}"
+                )
+
+                lines.append(
+                    f"   Assignee: {assignee}"
+                )
+
+                lines.append(
+                    f"   Deadline: {deadline}"
+                )
+
+                lines.append(
+                    f"   Priority: {item.priority}"
+                )
+
+                lines.append("")
+        else:
+            lines.append(
+                "No action items were recorded."
+            )
+
+        lines.append(
+            "NEXT STEPS"
+        )
+
+        lines.append(
+            "-" * 60
+        )
+
+        if mom.next_steps:
+            for index, step in enumerate(
+                mom.next_steps,
+                start=1,
+            ):
+                lines.append(
+                    f"{index}. {step}"
+                )
+        else:
+            lines.append(
+                "No next steps were recorded."
+            )
+
+        lines.append("")
+
+        lines.append(
+            "=" * 60
+        )
+
+        lines.append(
+            "Generated by AI Meeting Intelligence"
+        )
+
+        output_file.write_text(
+            "\n".join(lines),
+            encoding="utf-8",
+        )
+
+        return output_file
