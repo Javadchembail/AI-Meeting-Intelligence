@@ -15,3 +15,5 @@ pages_backup/
 microphone_*.py
 .vscode/
 .idea/
+*.backup
+*_corrupted.py

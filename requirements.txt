@@ -15,6 +15,7 @@ groq==1.7.0
 google-genai==2.23.0
 qdrant-client==1.19.1
 nemoguardrails==0.17.0
+logfire==5.1.0
 
 # Audio, transcription, and diarization
 numpy==2.4.6
@@ -27,6 +28,3 @@ pyannote-audio==4.0.7
 python-docx==1.2.0
 reportlab==5.0.1
 requests==2.34.2
-
-# Logs
-logfire==5.1.0
