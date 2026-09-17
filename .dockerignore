@@ -1,0 +1,17 @@
+.git/
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.streamlit/
+storage/
+exports/
+*.wav
+rag_request.json
+rag_response.json
+pages_backup/
+*_backup*.py
+*_before_*.py
+microphone_*.py
+.vscode/
+.idea/

@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+.venv/
+
+# Environment variables and secrets
+.env
+
+# Streamlit
+.streamlit/secrets.toml
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project runtime files
+storage/
+exports/
+*.wav
+rag_request.json
+rag_response.json
+
+# Local experiments and historical UI backups
+microphone_*.py
+*_backup*.py
+*_before_*.py
+pages_backup/
+
+# Logs
+*.log
+# Temporary and corrupted UI files
+*.backup
+*_corrupted.py
