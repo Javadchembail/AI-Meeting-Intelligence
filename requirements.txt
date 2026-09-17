@@ -1,4 +1,4 @@
-3.11.0
+
 fastapi==0.141.1
 uvicorn==0.53.0
 streamlit==1.63.0
@@ -14,7 +14,7 @@ psycopg[binary]==3.3.5
 groq==1.7.0
 google-genai==2.23.0
 qdrant-client==1.19.1
-nemoguardrails==0.24.1
+nemoguardrails==0.17.0
 
 # Audio, transcription, and diarization
 numpy==2.4.6
